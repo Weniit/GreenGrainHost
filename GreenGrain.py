@@ -25,7 +25,7 @@ session = {
 }
 
 # MQTT setup
-MQTT_BROKER = "broker.hivemq.com"  # Or your own broker IP
+MQTT_BROKER = "broker.hivemq.com"
 MQTT_PORT = 1883
 MQTT_TOPIC_SENSOR = "greengrain/sensor"
 
@@ -37,17 +37,34 @@ def on_message(client, userdata, msg):
     try:
         payload = msg.payload.decode()
         data = json.loads(payload)
+
         moisture = data.get("moisture")
         temperature = data.get("temperature")
+
+        # Validate sensor values
+        if moisture is not None:
+            try:
+                moisture = float(moisture)
+            except:
+                moisture = None
+        if temperature is not None:
+            try:
+                temperature = float(temperature)
+            except:
+                temperature = None
 
         if session["is_active"]:
             session["moisture"] = moisture
             session["temperature"] = temperature
-            session["elapsed"] = int(time.time() - session["start_time"]) if session["start_time"] else 0
+
+            if session["start_time"]:
+                session["elapsed"] = int(time.time() - session["start_time"])
+
             if moisture is not None:
                 session["moistures"].append(moisture)
             if temperature is not None:
                 session["temperatures"].append(temperature)
+
             print("Updated sensor data:", session)
 
     except Exception as e:
@@ -57,8 +74,14 @@ def start_mqtt():
     client = mqtt.Client()
     client.on_connect = on_connect
     client.on_message = on_message
-    client.connect(MQTT_BROKER, MQTT_PORT, 60)
-    client.loop_forever()
+
+    while True:
+        try:
+            client.connect(MQTT_BROKER, MQTT_PORT, 60)
+            client.loop_forever()
+        except Exception as e:
+            print("MQTT connection failed, retrying in 5s:", e)
+            time.sleep(5)
 
 # Start MQTT client in a background thread
 threading.Thread(target=start_mqtt, daemon=True).start()
