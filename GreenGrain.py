@@ -2,15 +2,20 @@ import uuid
 import time
 from flask import Flask, request, jsonify
 import firebase_admin
-from firebase_admin import credentials, db
+from firebase_admin import credentials, db, initialize_app
 import os,json
 
 app = Flask(__name__)
 
 # Firebase setup
 firebase_config = json.loads(os.getenv("FIREBASE_CREDENTIALS"))
+firebase_config["private_key"] = firebase_config["private_key"].replace("\\n", "\n")
+
 cred = credentials.Certificate(firebase_config)
-firebase_admin.initialize_app(cred)
+initialize_app(cred, {
+    "databaseURL": "https://greengrain-45f6d-default-rtdb.firebaseio.com"
+})
+
 
 # Per-user monitoring sessions
 user_sessions = {}
