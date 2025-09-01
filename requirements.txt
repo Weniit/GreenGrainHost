@@ -20,3 +20,4 @@ playwright~=1.54.0
 opencv-python~=4.11.0.86
 scipy~=1.15.2
 binarytree~=6.5.1
+gunicorn
