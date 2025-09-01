@@ -2,14 +2,14 @@ import uuid, time, threading, requests
 from flask import Flask, request, jsonify
 import firebase_admin
 from firebase_admin import credentials, db
+import os, json
 
 app = Flask(__name__)
 
 # Firebase setup
-cred = credentials.Certificate('greengrain-45f6d-firebase-adminsdk-fbsvc-f8c687b17f.json')
-firebase_admin.initialize_app(cred, {
-    'databaseURL': "https://greengrain-45f6d-default-rtdb.firebaseio.com"
-})
+firebase_config = json.loads(os.getenv("FIREBASE_CREDENTIALS"))
+cred = credentials.Certificate(firebase_config)
+firebase_admin.initialize_app(cred)
 
 
 ESP32_URL = "http://esp32.local/"
