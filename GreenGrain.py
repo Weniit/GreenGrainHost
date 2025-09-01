@@ -12,17 +12,8 @@ firebase_config = json.loads(os.getenv("FIREBASE_CREDENTIALS"))
 cred = credentials.Certificate(firebase_config)
 firebase_admin.initialize_app(cred)
 
-# Shared monitoring session
-session = {
-    "is_active": False,
-    "owner": None,
-    "start_time": None,
-    "elapsed": 0,
-    "moistures": [],
-    "temperatures": [],
-    "moisture": None,
-    "temperature": None
-}
+# Per-user sessions
+sessions = {}
 
 # MQTT setup
 MQTT_BROKER = "broker.hivemq.com"
@@ -38,37 +29,19 @@ def on_message(client, userdata, msg):
         payload = msg.payload.decode()
         data = json.loads(payload)
 
-        moisture = data.get("moisture")
-        temperature = data.get("temperature")
+        moisture = float(data.get("moisture", 0))
+        temperature = float(data.get("temperature", 0))
 
-        # Validate sensor values
-        if moisture is not None:
-            try:
-                moisture = float(moisture)
-            except:
-                moisture = None
-        if temperature is not None:
-            try:
-                temperature = float(temperature)
-            except:
-                temperature = None
-
-        if session["is_active"]:
-            session["moisture"] = moisture
-            session["temperature"] = temperature
-
-            if session["start_time"]:
+        # Update all active sessions
+        for username, session in sessions.items():
+            if session["is_active"]:
+                session["moisture"] = moisture
+                session["temperature"] = temperature
                 session["elapsed"] = int(time.time() - session["start_time"])
-
-            if moisture is not None:
                 session["moistures"].append(moisture)
-            if temperature is not None:
                 session["temperatures"].append(temperature)
-
-            print("Updated sensor data:", session)
-
     except Exception as e:
-        print("Failed to process MQTT message:", e)
+        print("MQTT message processing error:", e)
 
 def start_mqtt():
     client = mqtt.Client()
@@ -83,7 +56,7 @@ def start_mqtt():
             print("MQTT connection failed, retrying in 5s:", e)
             time.sleep(5)
 
-# Start MQTT client in a background thread
+# Start MQTT client in background
 threading.Thread(target=start_mqtt, daemon=True).start()
 
 # --- Flask endpoints ---
@@ -91,57 +64,32 @@ threading.Thread(target=start_mqtt, daemon=True).start()
 @app.post("/start-monitoring")
 def start_monitoring():
     data = request.get_json()
-    if not data or not data.get("username"):
+    username = data.get("username")
+    if not username:
         return jsonify({"success": False, "message": "Missing username"}), 400
 
-    username = data["username"]
-
-    if session["is_active"]:
-        if session["owner"] != username:
-            return jsonify({
-                "success": False,
-                "message": f"Monitoring already running by {session['owner']}"
-            }), 403
-        else:
-            session.update({
-                "start_time": time.time(),
-                "elapsed": 0,
-                "moistures": [],
-                "temperatures": [],
-                "moisture": None,
-                "temperature": None
-            })
-            return jsonify({"success": True, "message": "Monitoring restarted", "data": session})
-
-    session.update({
+    session = {
         "is_active": True,
-        "owner": username,
         "start_time": time.time(),
         "elapsed": 0,
         "moistures": [],
         "temperatures": [],
         "moisture": None,
         "temperature": None
-    })
+    }
+    sessions[username] = session
     return jsonify({"success": True, "message": "Monitoring started", "data": session})
 
 @app.post("/stop-monitoring")
 def stop_monitoring():
     data = request.get_json()
-    required_keys = ["username", "userId", "startedTime", "endedTime", "duration", "date"]
-    if not data or not all(k in data for k in required_keys):
-        return jsonify({"success": False, "message": "Missing fields"}), 400
+    username = data.get("username")
+    if username not in sessions or not sessions[username]["is_active"]:
+        return jsonify({"success": False, "message": "No active session"}), 400
 
-    username = data["username"]
-
-    if session["owner"] != username:
-        return jsonify({"success": False, "message": f"Only {session['owner']} can stop the monitoring"}), 403
-
-    if not session["is_active"] or len(session.get("temperatures", [])) == 0:
-        return jsonify({"success": False, "message": "No active monitoring session"}), 400
-
-    avg_temp = sum(session["temperatures"]) / len(session["temperatures"])
-    avg_moist = sum(session["moistures"]) / len(session["moistures"])
+    session = sessions[username]
+    avg_temp = round(sum(session["temperatures"]) / len(session["temperatures"]), 2) if session["temperatures"] else None
+    avg_moist = round(sum(session["moistures"]) / len(session["moistures"]), 2) if session["moistures"] else None
     monitoring_id = str(uuid.uuid4())
 
     try:
@@ -151,29 +99,23 @@ def stop_monitoring():
             "startingTime": data["startedTime"],
             "endTime": data["endedTime"],
             "duration": data["duration"],
-            "averageTemperature": round(avg_temp, 2),
-            "averageMoisture": round(avg_moist, 2)
+            "averageTemperature": avg_temp,
+            "averageMoisture": avg_moist
         })
     except Exception as e:
         print("Firebase error:", e)
         return jsonify({"success": False, "message": "Failed to write to Firebase"}), 500
 
-    # Reset session
-    session.update({
-        "is_active": False,
-        "owner": None,
-        "start_time": None,
-        "elapsed": 0,
-        "moistures": [],
-        "temperatures": [],
-        "moisture": None,
-        "temperature": None
-    })
-
+    del sessions[username]
     return jsonify({"success": True, "message": "Monitoring stopped", "monitoringId": monitoring_id})
 
-@app.get("/status")
-def get_status():
+@app.get("/status/<username>")
+def get_status(username):
+    session = sessions.get(username)
+    if not session:
+        return jsonify({"is_active": False})
+    if session["is_active"] and session["start_time"]:
+        session["elapsed"] = int(time.time() - session["start_time"])
     return jsonify(session)
 
 if __name__ == '__main__':
